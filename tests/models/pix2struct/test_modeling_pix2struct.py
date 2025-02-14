@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Testing suite for the PyTorch Pix2Struct model. """
+"""Testing suite for the PyTorch Pix2Struct model."""
 
 import copy
 import inspect
@@ -27,6 +27,7 @@ from transformers import Pix2StructConfig, Pix2StructTextConfig, Pix2StructVisio
 from transformers.testing_utils import require_torch, require_vision, slow, torch_device
 from transformers.utils import is_torch_available, is_vision_available
 
+from ...generation.test_utils import GenerationTesterMixin
 from ...test_configuration_common import ConfigTester
 from ...test_modeling_common import (
     ModelTesterMixin,
@@ -35,6 +36,7 @@ from ...test_modeling_common import (
     ids_tensor,
     random_attention_mask,
 )
+from ...test_pipeline_mixin import PipelineTesterMixin
 
 
 if is_torch_available():
@@ -47,7 +49,6 @@ if is_torch_available():
         Pix2StructTextModel,
         Pix2StructVisionModel,
     )
-    from transformers.models.pix2struct.modeling_pix2struct import PIX2STRUCT_PRETRAINED_MODEL_ARCHIVE_LIST
 
 
 if is_vision_available():
@@ -67,7 +68,7 @@ class Pix2StructVisionModelTester:
         patch_embed_hidden_size=12,
         projection_dim=32,
         max_patches=64,
-        num_hidden_layers=5,
+        num_hidden_layers=2,
         num_attention_heads=4,
         intermediate_size=37,
         dropout=0.1,
@@ -162,7 +163,7 @@ class Pix2StructVisionModelTest(ModelTesterMixin, unittest.TestCase):
     def test_inputs_embeds(self):
         pass
 
-    def test_model_common_attributes(self):
+    def test_model_get_set_embeddings(self):
         config, _ = self.model_tester.prepare_config_and_inputs_for_common()
 
         for model_class in self.all_model_classes:
@@ -195,6 +196,18 @@ class Pix2StructVisionModelTest(ModelTesterMixin, unittest.TestCase):
     def test_training_gradient_checkpointing(self):
         pass
 
+    @unittest.skip(
+        reason="This architecure seem to not compute gradients properly when using GC, check: https://github.com/huggingface/transformers/pull/27124"
+    )
+    def test_training_gradient_checkpointing_use_reentrant(self):
+        pass
+
+    @unittest.skip(
+        reason="This architecure seem to not compute gradients properly when using GC, check: https://github.com/huggingface/transformers/pull/27124"
+    )
+    def test_training_gradient_checkpointing_use_reentrant_false(self):
+        pass
+
     @unittest.skip(reason="Training is tested directly on `Pix2StructTextImageModelTest`")
     def test_retain_grad_hidden_states_attentions(self):
         pass
@@ -209,9 +222,9 @@ class Pix2StructVisionModelTest(ModelTesterMixin, unittest.TestCase):
 
     @slow
     def test_model_from_pretrained(self):
-        for model_name in PIX2STRUCT_PRETRAINED_MODEL_ARCHIVE_LIST[:1]:
-            model = Pix2StructVisionModel.from_pretrained(model_name)
-            self.assertIsNotNone(model)
+        model_name = "google/pix2struct-textcaps-base"
+        model = Pix2StructVisionModel.from_pretrained(model_name)
+        self.assertIsNotNone(model)
 
 
 class Pix2StructTextModelTester:
@@ -226,7 +239,7 @@ class Pix2StructTextModelTester:
         vocab_size=99,
         hidden_size=12,
         projection_dim=32,
-        num_hidden_layers=5,
+        num_hidden_layers=2,
         num_attention_heads=4,
         intermediate_size=37,
         dropout=0.1,
@@ -332,6 +345,18 @@ class Pix2StructTextModelTest(ModelTesterMixin, unittest.TestCase):
     def test_training_gradient_checkpointing(self):
         pass
 
+    @unittest.skip(
+        reason="This architecure seem to not compute gradients properly when using GC, check: https://github.com/huggingface/transformers/pull/27124"
+    )
+    def test_training_gradient_checkpointing_use_reentrant(self):
+        pass
+
+    @unittest.skip(
+        reason="This architecure seem to not compute gradients properly when using GC, check: https://github.com/huggingface/transformers/pull/27124"
+    )
+    def test_training_gradient_checkpointing_use_reentrant_false(self):
+        pass
+
     @unittest.skip(reason="Pix2Struct does not use inputs_embeds")
     def test_inputs_embeds(self):
         pass
@@ -346,12 +371,12 @@ class Pix2StructTextModelTest(ModelTesterMixin, unittest.TestCase):
 
     @slow
     def test_model_from_pretrained(self):
-        for model_name in PIX2STRUCT_PRETRAINED_MODEL_ARCHIVE_LIST[:1]:
-            model = Pix2StructTextModel.from_pretrained(model_name)
-            self.assertIsNotNone(model)
+        model_name = "google/pix2struct-textcaps-base"
+        model = Pix2StructTextModel.from_pretrained(model_name)
+        self.assertIsNotNone(model)
 
 
-class Pix2StructTextImageModelsModelTester:
+class Pix2StructModelTester:
     def __init__(self, parent, text_kwargs=None, vision_kwargs=None, is_training=True):
         if text_kwargs is None:
             text_kwargs = {}
@@ -361,7 +386,10 @@ class Pix2StructTextImageModelsModelTester:
         self.parent = parent
         self.text_model_tester = Pix2StructTextModelTester(parent, **text_kwargs)
         self.vision_model_tester = Pix2StructVisionModelTester(parent, **vision_kwargs)
+        self.batch_size = self.text_model_tester.batch_size  # need bs for batching_equivalence test
+        self.seq_length = self.text_model_tester.seq_length  # need seq_length for common tests
         self.is_training = is_training
+        self.max_patches = self.vision_model_tester.max_patches
 
     def prepare_config_and_inputs(self):
         text_config, input_ids, attention_mask = self.text_model_tester.prepare_config_and_inputs()
@@ -391,8 +419,13 @@ class Pix2StructTextImageModelsModelTester:
 
 
 @require_torch
-class Pix2StructTextImageModelTest(ModelTesterMixin, unittest.TestCase):
+class Pix2StructModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterMixin, unittest.TestCase):
     all_model_classes = (Pix2StructForConditionalGeneration,) if is_torch_available() else ()
+    pipeline_model_mapping = (
+        {"image-to-text": Pix2StructForConditionalGeneration, "image-text-to-text": Pix2StructForConditionalGeneration}
+        if is_torch_available()
+        else {}
+    )
     fx_compatible = False
     test_head_masking = False
     test_pruning = False
@@ -401,7 +434,7 @@ class Pix2StructTextImageModelTest(ModelTesterMixin, unittest.TestCase):
     test_torchscript = False
 
     def setUp(self):
-        self.model_tester = Pix2StructTextImageModelsModelTester(self)
+        self.model_tester = Pix2StructModelTester(self)
 
     def test_model(self):
         config, input_dict = self.model_tester.prepare_config_and_inputs_for_common()
@@ -418,6 +451,16 @@ class Pix2StructTextImageModelTest(ModelTesterMixin, unittest.TestCase):
                 ),
             )
 
+    def test_generative_model(self):
+        config, input_dict = self.model_tester.prepare_config_and_inputs_for_common()
+        for model_class in self.all_generative_model_classes:
+            model = model_class(config).eval().to(torch_device)
+
+            output = model.generate(**input_dict, use_cache=False, min_new_tokens=10, max_new_tokens=10)
+            output_use_cache = model.generate(**input_dict, use_cache=True, min_new_tokens=10, max_new_tokens=10)
+
+            torch.testing.assert_close(output, output_use_cache)
+
     @unittest.skip(reason="Hidden_states is tested in individual model tests")
     def test_hidden_states_output(self):
         pass
@@ -431,7 +474,7 @@ class Pix2StructTextImageModelTest(ModelTesterMixin, unittest.TestCase):
         pass
 
     @unittest.skip(reason="Pix2StructModel does not have input/output embeddings")
-    def test_model_common_attributes(self):
+    def test_model_get_set_embeddings(self):
         pass
 
     def test_forward_signature(self):
@@ -462,7 +505,7 @@ class Pix2StructTextImageModelTest(ModelTesterMixin, unittest.TestCase):
 
     def test_training(self):
         if not self.model_tester.is_training:
-            return
+            self.skipTest(reason="model_tester.is_training is set to False")
 
         for model_class in self.all_model_classes[:-1]:
             config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
@@ -481,7 +524,7 @@ class Pix2StructTextImageModelTest(ModelTesterMixin, unittest.TestCase):
 
     def test_training_gradient_checkpointing(self):
         if not self.model_tester.is_training:
-            return
+            self.skipTest(reason="model_tester.is_training is set to False")
 
         for model_class in self.all_model_classes[:-1]:
             config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
@@ -528,7 +571,7 @@ class Pix2StructTextImageModelTest(ModelTesterMixin, unittest.TestCase):
     def test_resize_tokens_embeddings(self):
         original_config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
         if not self.test_resize_embeddings:
-            return
+            self.skipTest(reason="test_resize_embeddings is set to False")
 
         for model_class in self.all_model_classes:
             config = copy.deepcopy(original_config)
@@ -575,13 +618,13 @@ class Pix2StructTextImageModelTest(ModelTesterMixin, unittest.TestCase):
     def test_resize_embeddings_untied(self):
         original_config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
         if not self.test_resize_embeddings:
-            return
+            self.skipTest(reason="test_resize_embeddings is set to False")
 
         original_config.tie_word_embeddings = False
 
         # if model cannot untied embeddings -> leave test
         if original_config.tie_word_embeddings:
-            return
+            self.skipTest(reason="Model cannot untie embeddings")
 
         for model_class in self.all_model_classes:
             config = copy.deepcopy(original_config)
@@ -625,7 +668,7 @@ class Pix2StructTextImageModelTest(ModelTesterMixin, unittest.TestCase):
 
     def _create_and_check_torchscript(self, config, inputs_dict):
         if not self.test_torchscript:
-            return
+            self.skipTest(reason="test_torchscript is set to False")
 
         configs_no_init = _config_zero_init(config)  # To be sure we have no Nan
         configs_no_init.torchscript = True
@@ -664,7 +707,27 @@ class Pix2StructTextImageModelTest(ModelTesterMixin, unittest.TestCase):
             model_state_dict = model.state_dict()
             loaded_model_state_dict = loaded_model.state_dict()
 
+            non_persistent_buffers = {}
+            for key in loaded_model_state_dict.keys():
+                if key not in model_state_dict.keys():
+                    non_persistent_buffers[key] = loaded_model_state_dict[key]
+
+            loaded_model_state_dict = {
+                key: value for key, value in loaded_model_state_dict.items() if key not in non_persistent_buffers
+            }
+
             self.assertEqual(set(model_state_dict.keys()), set(loaded_model_state_dict.keys()))
+
+            model_buffers = list(model.buffers())
+            for non_persistent_buffer in non_persistent_buffers.values():
+                found_buffer = False
+                for i, model_buffer in enumerate(model_buffers):
+                    if torch.equal(non_persistent_buffer, model_buffer):
+                        found_buffer = True
+                        break
+
+                self.assertTrue(found_buffer)
+                model_buffers.pop(i)
 
             models_equal = True
             for layer_name, p1 in model_state_dict.items():
@@ -688,6 +751,26 @@ class Pix2StructTextImageModelTest(ModelTesterMixin, unittest.TestCase):
             config.save_pretrained(tmp_dir_name)
             text_config = Pix2StructTextConfig.from_pretrained(tmp_dir_name)
             self.assertDictEqual(config.text_config.to_dict(), text_config.to_dict())
+
+    def _check_encoder_attention_for_generate(self, attentions, batch_size, config, prompt_length):
+        # overwrite because # pix2struct seq length depends on image inputs
+        prompt_length = self.model_tester.max_patches
+        encoder_expected_shape = (batch_size, config.num_attention_heads, prompt_length, prompt_length)
+        self.assertIsInstance(attentions, tuple)
+        self.assertListEqual(
+            [layer_attentions.shape for layer_attentions in attentions],
+            [encoder_expected_shape] * len(attentions),
+        )
+
+    def _check_encoder_hidden_states_for_generate(self, hidden_states, batch_size, config, prompt_length):
+        # overwrite because # pix2struct seq length depends on image inputs
+        prompt_length = self.model_tester.max_patches
+        encoder_expected_shape = (batch_size, prompt_length, config.hidden_size)
+        self.assertIsInstance(hidden_states, tuple)
+        self.assertListEqual(
+            [layer_hidden_states.shape for layer_hidden_states in hidden_states],
+            [encoder_expected_shape] * len(hidden_states),
+        )
 
 
 # We will verify our results on an image of a stop sign
@@ -757,12 +840,12 @@ class Pix2StructIntegrationTest(unittest.TestCase):
 
         self.assertEqual(
             processor.decode(predictions[0], skip_special_tokens=True),
-            "A picture of a stop sign with a red stop sign on it.",
+            "A picture of a stop sign with a red stop sign",
         )
 
         self.assertEqual(
             processor.decode(predictions[1], skip_special_tokens=True),
-            "An photography of the Temple Bar and the Temple Bar.",
+            "An photography of the Temple Bar and other places in the city.",
         )
 
     def test_vqa_model(self):

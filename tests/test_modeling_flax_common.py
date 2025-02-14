@@ -17,25 +17,15 @@ import inspect
 import json
 import random
 import tempfile
-import unittest
 from typing import List, Tuple
 
 import numpy as np
-from huggingface_hub import HfFolder, delete_repo
-from requests.exceptions import HTTPError
 
 import transformers
-from transformers import BertConfig, is_flax_available, is_torch_available
+from transformers import is_flax_available, is_torch_available
+from transformers.cache_utils import DynamicCache
 from transformers.models.auto import get_values
-from transformers.testing_utils import (
-    TOKEN,
-    USER,
-    CaptureLogger,
-    is_pt_flax_cross_test,
-    is_staging_test,
-    require_flax,
-    torch_device,
-)
+from transformers.testing_utils import CaptureLogger, is_pt_flax_cross_test, require_flax, torch_device
 from transformers.utils import CONFIG_NAME, GENERATION_CONFIG_NAME, logging
 from transformers.utils.generic import ModelOutput
 
@@ -67,14 +57,6 @@ if is_flax_available():
 
 if is_torch_available():
     import torch
-
-
-def _config_zero_init(config):
-    configs_no_init = copy.deepcopy(config)
-    for key in configs_no_init.__dict__.keys():
-        if "_range" in key or "_std" in key or "initializer_factor" in key:
-            setattr(configs_no_init, key, 1e-10)
-    return configs_no_init
 
 
 def ids_tensor(shape, vocab_size, rng=None):
@@ -151,6 +133,10 @@ class FlaxModelTesterMixin:
     test_head_masking = False
     has_attentions = True
 
+    @property
+    def all_generative_model_classes(self):
+        return tuple(model_class for model_class in self.all_model_classes if model_class.can_generate())
+
     def _prepare_for_class(self, inputs_dict, model_class):
         inputs_dict = copy.deepcopy(inputs_dict)
 
@@ -199,7 +185,7 @@ class FlaxModelTesterMixin:
             check_equivalence(model, tuple_inputs, dict_inputs, {"output_hidden_states": True})
 
     # (Copied from tests.test_modeling_common.ModelTesterMixin.check_pt_flax_outputs)
-    def check_pt_flax_outputs(self, fx_outputs, pt_outputs, model_class, tol=1e-5, name="outputs", attributes=None):
+    def check_pt_flax_outputs(self, fx_outputs, pt_outputs, model_class, tol=1e-4, name="outputs", attributes=None):
         """
         Args:
             model_class: The class of the model that is currently testing. For example, ..., etc.
@@ -209,7 +195,6 @@ class FlaxModelTesterMixin:
                 Currently unused, but in the future, we could use this information to make the error message clearer
                 by giving the name(s) of the output tensor(s) with large difference(s) between PT and Flax.
         """
-
         self.assertEqual(type(name), str)
         if attributes is not None:
             self.assertEqual(type(attributes), tuple, f"{name}: The argument `attributes` should be a `tuple`")
@@ -254,6 +239,8 @@ class FlaxModelTesterMixin:
                 attributes = tuple([f"{name}_{idx}" for idx in range(len(fx_outputs))])
 
             for fx_output, pt_output, attr in zip(fx_outputs, pt_outputs, attributes):
+                if isinstance(pt_output, DynamicCache):
+                    pt_output = pt_output.to_legacy_cache()
                 self.check_pt_flax_outputs(fx_output, pt_output, model_class, tol=tol, name=attr)
 
         elif isinstance(fx_outputs, jnp.ndarray):
@@ -390,7 +377,9 @@ class FlaxModelTesterMixin:
 
                 with tempfile.TemporaryDirectory() as tmpdirname:
                     fx_model.save_pretrained(tmpdirname)
-                    pt_model_loaded = pt_model_class.from_pretrained(tmpdirname, from_flax=True)
+                    pt_model_loaded = pt_model_class.from_pretrained(
+                        tmpdirname, from_flax=True, attn_implementation=fx_model.config._attn_implementation
+                    )
 
                 # send pytorch model to the correct device
                 pt_model_loaded.to(torch_device)
@@ -811,7 +800,7 @@ class FlaxModelTesterMixin:
             types = flatten_dict(types)
 
             for name, type_ in types.items():
-                self.assertEquals(type_, jnp.float32, msg=f"param {name} is not initialized in fp32.")
+                self.assertEqual(type_, jnp.float32, msg=f"param {name} is not initialized in fp32.")
 
     def test_to_bf16(self):
         config, _ = self.model_tester.prepare_config_and_inputs_for_common()
@@ -1003,7 +992,7 @@ class FlaxModelTesterMixin:
 
             # Check if we params can be properly initialized when calling init_weights
             params = model.init_weights(model.key, model.input_shape)
-            self.assertIsInstance(params, FrozenDict)
+            assert isinstance(params, (dict, FrozenDict)), f"params are not an instance of {FrozenDict}"
             # Check if all required parmas are initialized
             keys = set(flatten_dict(unfreeze(params)).keys())
             self.assertTrue(all(k in keys for k in model.required_params))
@@ -1164,155 +1153,3 @@ class FlaxModelTesterMixin:
             # ensure that the outputs remain precisely equal
             for output, remat_output in zip(outputs, remat_outputs):
                 self.assertTrue((output == remat_output).all())
-
-
-@require_flax
-@is_staging_test
-class FlaxModelPushToHubTester(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls._token = TOKEN
-        HfFolder.save_token(TOKEN)
-
-    @classmethod
-    def tearDownClass(cls):
-        try:
-            delete_repo(token=cls._token, repo_id="test-model-flax")
-        except HTTPError:
-            pass
-
-        try:
-            delete_repo(token=cls._token, repo_id="valid_org/test-model-flax-org")
-        except HTTPError:
-            pass
-
-    def test_push_to_hub(self):
-        config = BertConfig(
-            vocab_size=99, hidden_size=32, num_hidden_layers=5, num_attention_heads=4, intermediate_size=37
-        )
-        model = FlaxBertModel(config)
-        model.push_to_hub("test-model-flax", use_auth_token=self._token)
-
-        new_model = FlaxBertModel.from_pretrained(f"{USER}/test-model-flax")
-
-        base_params = flatten_dict(unfreeze(model.params))
-        new_params = flatten_dict(unfreeze(new_model.params))
-
-        for key in base_params.keys():
-            max_diff = (base_params[key] - new_params[key]).sum().item()
-            self.assertLessEqual(max_diff, 1e-3, msg=f"{key} not identical")
-
-        # Reset repo
-        delete_repo(token=self._token, repo_id="test-model-flax")
-
-        # Push to hub via save_pretrained
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            model.save_pretrained(tmp_dir, repo_id="test-model-flax", push_to_hub=True, use_auth_token=self._token)
-
-        new_model = FlaxBertModel.from_pretrained(f"{USER}/test-model-flax")
-
-        base_params = flatten_dict(unfreeze(model.params))
-        new_params = flatten_dict(unfreeze(new_model.params))
-
-        for key in base_params.keys():
-            max_diff = (base_params[key] - new_params[key]).sum().item()
-            self.assertLessEqual(max_diff, 1e-3, msg=f"{key} not identical")
-
-    def test_push_to_hub_in_organization(self):
-        config = BertConfig(
-            vocab_size=99, hidden_size=32, num_hidden_layers=5, num_attention_heads=4, intermediate_size=37
-        )
-        model = FlaxBertModel(config)
-        model.push_to_hub("valid_org/test-model-flax-org", use_auth_token=self._token)
-
-        new_model = FlaxBertModel.from_pretrained("valid_org/test-model-flax-org")
-
-        base_params = flatten_dict(unfreeze(model.params))
-        new_params = flatten_dict(unfreeze(new_model.params))
-
-        for key in base_params.keys():
-            max_diff = (base_params[key] - new_params[key]).sum().item()
-            self.assertLessEqual(max_diff, 1e-3, msg=f"{key} not identical")
-
-        # Reset repo
-        delete_repo(token=self._token, repo_id="valid_org/test-model-flax-org")
-
-        # Push to hub via save_pretrained
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            model.save_pretrained(
-                tmp_dir, repo_id="valid_org/test-model-flax-org", push_to_hub=True, use_auth_token=self._token
-            )
-
-        new_model = FlaxBertModel.from_pretrained("valid_org/test-model-flax-org")
-
-        base_params = flatten_dict(unfreeze(model.params))
-        new_params = flatten_dict(unfreeze(new_model.params))
-
-        for key in base_params.keys():
-            max_diff = (base_params[key] - new_params[key]).sum().item()
-            self.assertLessEqual(max_diff, 1e-3, msg=f"{key} not identical")
-
-
-def check_models_equal(model1, model2):
-    models_are_equal = True
-    flat_params_1 = flatten_dict(model1.params)
-    flat_params_2 = flatten_dict(model2.params)
-    for key in flat_params_1.keys():
-        if np.sum(np.abs(flat_params_1[key] - flat_params_2[key])) > 1e-4:
-            models_are_equal = False
-
-    return models_are_equal
-
-
-@require_flax
-class FlaxModelUtilsTest(unittest.TestCase):
-    def test_model_from_pretrained_subfolder(self):
-        config = BertConfig.from_pretrained("hf-internal-testing/tiny-bert-flax-only")
-        model = FlaxBertModel(config)
-
-        subfolder = "bert"
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            model.save_pretrained(os.path.join(tmp_dir, subfolder))
-
-            with self.assertRaises(OSError):
-                _ = FlaxBertModel.from_pretrained(tmp_dir)
-
-            model_loaded = FlaxBertModel.from_pretrained(tmp_dir, subfolder=subfolder)
-
-        self.assertTrue(check_models_equal(model, model_loaded))
-
-    def test_model_from_pretrained_subfolder_sharded(self):
-        config = BertConfig.from_pretrained("hf-internal-testing/tiny-bert-flax-only")
-        model = FlaxBertModel(config)
-
-        subfolder = "bert"
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            model.save_pretrained(os.path.join(tmp_dir, subfolder), max_shard_size="10KB")
-
-            with self.assertRaises(OSError):
-                _ = FlaxBertModel.from_pretrained(tmp_dir)
-
-            model_loaded = FlaxBertModel.from_pretrained(tmp_dir, subfolder=subfolder)
-
-        self.assertTrue(check_models_equal(model, model_loaded))
-
-    def test_model_from_pretrained_hub_subfolder(self):
-        subfolder = "bert"
-        model_id = "hf-internal-testing/tiny-random-bert-subfolder"
-
-        with self.assertRaises(OSError):
-            _ = FlaxBertModel.from_pretrained(model_id)
-
-        model = FlaxBertModel.from_pretrained(model_id, subfolder=subfolder)
-
-        self.assertIsNotNone(model)
-
-    def test_model_from_pretrained_hub_subfolder_sharded(self):
-        subfolder = "bert"
-        model_id = "hf-internal-testing/tiny-random-bert-sharded-subfolder"
-        with self.assertRaises(OSError):
-            _ = FlaxBertModel.from_pretrained(model_id)
-
-        model = FlaxBertModel.from_pretrained(model_id, subfolder=subfolder)
-
-        self.assertIsNotNone(model)

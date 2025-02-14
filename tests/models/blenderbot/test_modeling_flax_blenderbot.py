@@ -87,7 +87,7 @@ class FlaxBlenderbotModelTester:
         hidden_act="gelu",
         hidden_dropout_prob=0.1,
         attention_probs_dropout_prob=0.1,
-        max_position_embeddings=32,
+        max_position_embeddings=50,
         eos_token_id=2,
         pad_token_id=1,
         bos_token_id=0,
@@ -319,7 +319,6 @@ class FlaxBlenderbotModelTest(FlaxModelTesterMixin, unittest.TestCase, FlaxGener
         if is_flax_available()
         else ()
     )
-    all_generative_model_classes = (FlaxBlenderbotForConditionalGeneration,) if is_flax_available() else ()
 
     def setUp(self):
         self.model_tester = FlaxBlenderbotModelTester(self)

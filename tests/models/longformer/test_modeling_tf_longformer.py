@@ -19,7 +19,7 @@ from __future__ import annotations
 import unittest
 
 from transformers import is_tf_available
-from transformers.testing_utils import require_sentencepiece, require_tf, require_tokenizers, slow, tooslow
+from transformers.testing_utils import require_sentencepiece, require_tf, require_tokenizers, slow
 
 from ...test_configuration_common import ConfigTester
 from ...test_modeling_tf_common import TFModelTesterMixin, ids_tensor, random_attention_mask
@@ -37,8 +37,8 @@ if is_tf_available():
         TFLongformerForSequenceClassification,
         TFLongformerForTokenClassification,
         TFLongformerModel,
-        TFLongformerSelfAttention,
     )
+    from transformers.models.longformer.modeling_tf_longformer import TFLongformerSelfAttention
     from transformers.tf_utils import shape_list
 
 
@@ -56,7 +56,7 @@ class TFLongformerModelTester:
         self.use_labels = True
         self.vocab_size = 99
         self.hidden_size = 32
-        self.num_hidden_layers = 5
+        self.num_hidden_layers = 2
         self.num_attention_heads = 4
         self.intermediate_size = 37
         self.hidden_act = "gelu"
@@ -303,10 +303,17 @@ class TFLongformerModelTest(TFModelTesterMixin, PipelineTesterMixin, unittest.Te
 
     # TODO: Fix the failed tests
     def is_pipeline_test_to_skip(
-        self, pipeline_test_casse_name, config_class, model_architecture, tokenizer_name, processor_name
+        self,
+        pipeline_test_case_name,
+        config_class,
+        model_architecture,
+        tokenizer_name,
+        image_processor_name,
+        feature_extractor_name,
+        processor_name,
     ):
         if (
-            pipeline_test_casse_name == "QAPipelineTests"
+            pipeline_test_case_name == "QAPipelineTests"
             and tokenizer_name is not None
             and not tokenizer_name.endswith("Fast")
         ):
@@ -356,12 +363,12 @@ class TFLongformerModelTest(TFModelTesterMixin, PipelineTesterMixin, unittest.Te
         config_and_inputs = self.model_tester.prepare_config_and_inputs()
         self.model_tester.create_and_check_for_multiple_choice(*config_and_inputs)
 
-    @tooslow
+    @unittest.skip("Longformer keeps using potentially symbolic tensors in conditionals and breaks tracing.")
     def test_saved_model_creation(self):
         pass
 
-    def test_xla_mode(self):
-        # TODO JP: Make Longformer XLA compliant
+    @unittest.skip("Longformer keeps using potentially symbolic tensors in conditionals and breaks tracing.")
+    def test_compile_tf_model(self):
         pass
 
 

@@ -52,7 +52,7 @@ class FlaxPegasusModelTester:
         use_labels=False,
         vocab_size=99,
         hidden_size=32,
-        num_hidden_layers=5,
+        num_hidden_layers=2,
         num_attention_heads=4,
         intermediate_size=37,
         hidden_dropout_prob=0.1,
@@ -230,7 +230,6 @@ class FlaxPegasusModelTest(FlaxModelTesterMixin, unittest.TestCase):
         if is_flax_available()
         else ()
     )
-    all_generative_model_classes = (FlaxPegasusForConditionalGeneration,) if is_flax_available() else ()
     is_encoder_decoder = True
     test_pruning = False
     test_head_masking = False

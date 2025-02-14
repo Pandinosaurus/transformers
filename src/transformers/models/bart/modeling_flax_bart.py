@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Flax Bart model."""
+"""Flax Bart model."""
 
 import math
 import random
@@ -217,7 +217,7 @@ BART_DECODE_INPUTS_DOCSTRING = r"""
 """
 
 
-def shift_tokens_right(input_ids: jnp.array, pad_token_id: int, decoder_start_token_id: int) -> jnp.ndarray:
+def shift_tokens_right(input_ids: jnp.ndarray, pad_token_id: int, decoder_start_token_id: int) -> jnp.ndarray:
     """
     Shift input ids one token to the right.
     """
@@ -1467,8 +1467,8 @@ class FlaxBartForConditionalGeneration(FlaxBartPreTrainedModel):
         self,
         decoder_input_ids,
         max_length,
-        attention_mask: Optional[jnp.DeviceArray] = None,
-        decoder_attention_mask: Optional[jnp.DeviceArray] = None,
+        attention_mask: Optional[jax.Array] = None,
+        decoder_attention_mask: Optional[jax.Array] = None,
         encoder_outputs=None,
         **kwargs,
     ):
@@ -1599,7 +1599,7 @@ class FlaxBartForSequenceClassificationModule(nn.Module):
         eos_mask = jnp.where(input_ids == self.config.eos_token_id, 1, 0)
 
         # The first condition is necessary to overcome jax._src.errors.ConcretizationTypeError during JIT compilation
-        if type(eos_mask) != jax.interpreters.partial_eval.DynamicJaxprTracer:
+        if not isinstance(eos_mask, jax.interpreters.partial_eval.DynamicJaxprTracer):
             if len(jnp.unique(eos_mask.sum(1))) > 1:
                 raise ValueError("All examples must have the same number of <eos> tokens.")
 
@@ -1960,7 +1960,7 @@ class FlaxBartForCausalLMModule(nn.Module):
 class FlaxBartForCausalLM(FlaxBartDecoderPreTrainedModel):
     module_class = FlaxBartForCausalLMModule
 
-    def prepare_inputs_for_generation(self, input_ids, max_length, attention_mask: Optional[jnp.DeviceArray] = None):
+    def prepare_inputs_for_generation(self, input_ids, max_length, attention_mask: Optional[jax.Array] = None):
         # initializing the cache
         batch_size, seq_length = input_ids.shape
 
@@ -1993,3 +1993,14 @@ append_call_sample_docstring(
     FlaxCausalLMOutputWithCrossAttentions,
     _CONFIG_FOR_DOC,
 )
+
+
+__all__ = [
+    "FlaxBartDecoderPreTrainedModel",
+    "FlaxBartForCausalLM",
+    "FlaxBartForConditionalGeneration",
+    "FlaxBartForQuestionAnswering",
+    "FlaxBartForSequenceClassification",
+    "FlaxBartModel",
+    "FlaxBartPreTrainedModel",
+]
